@@ -137,7 +137,7 @@ all.config
 kernel/configs/android-*.cfg
 
 # ignore net/oplus_modules
-net/oplus_modules
+# net/oplus_modules
 
 # out folder
 out/
