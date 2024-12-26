@@ -33,8 +33,8 @@
 #include <../../../../kernel/msm-5.4/mm/internal.h>
 #include <../../../../kernel/msm-5.4/mm/slab.h>
 #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
-#include <../../../../kernel/msm-4.19/mm/internal.h>
-#include <../../../../kernel/msm-4.19/mm/slab.h>
+#include <../../../../mm/internal.h>
+#include <../../../../mm/slab.h>
 #else
 #include <../../../../kernel/msm-4.14/mm/internal.h>
 #include <../../../../kernel/msm-4.14/mm/slab.h>
