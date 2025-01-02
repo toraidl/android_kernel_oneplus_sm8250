@@ -8,7 +8,6 @@ vendor := $(srctree)/$(src)
 #endif
 #else
 #subdir-y += qcom
-ifeq ($(strip $(BRAND_SHOW_FLAG)), oneplus)
 #oneplus SM8250 project
 subdir-y += 19821
 subdir-y += 19855
@@ -19,7 +18,6 @@ subdir-y += 20828
 #7250 NORD
 subdir-y += 20801
 subdir-y += 20813
-else ifeq ($(strip $(BRAND_SHOW_FLAG)), oplus)
 #oplus SM8250 project
 subdir-y += 19795
 subdir-y += 19795_t0_evt2
@@ -31,8 +29,6 @@ subdir-y += 21619
 subdir-y += 21623
 subdir-y += 21733
 #oplus SM7250 project
-subdir-y += oplus
-else
 #oplus SM8250 project
 subdir-y += 19065
 subdir-y += 19066
@@ -60,5 +56,4 @@ subdir-y += 21615
 subdir-y += 21619
 subdir-y += 21623
 subdir-y += 21733
-endif
 #endif
