@@ -36,11 +36,13 @@ nocol='\033[0m'
 
 if [[ $1 == "ksu" ]]; then 
 	# kernel-SU add
-    KSU_STATUS="ksu"
-	curl -LSs "https://raw.githubusercontent.com/toraidl/KernelSU/legacy/kernel/setup.sh" | bash -s
+    KSU_STATUS="KSU"
+	#curl -LSs "https://raw.githubusercontent.com/toraidl/KernelSU/legacy/kernel/setup.sh" | bash -s
+	#curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
+    curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs-4.19
 	echo "**** Kernel defconfig is set to $KERNEL_DEFCONFIG ****"
 else
-    KSU_STATUS="noksu"
+    KSU_STATUS="NOKSU"
 fi
 
 echo -e "$blue***********************************************"
