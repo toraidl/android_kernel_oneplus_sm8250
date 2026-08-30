@@ -192,7 +192,7 @@ echo "          BUILDING KERNEL ($BUILD_FLAVOR)"
 echo -e "***********************************************$NOCOL"
 
 make "$KERNEL_DEFCONFIG" O=out CC=clang
-./scripts/config --file out/.config --disable STMVL53L1
+./scripts/config --file out/.config --enable STMVL53L1
 if (( RESUKISU_ENABLED )); then
 	./scripts/config --file out/.config --enable KSU --enable KSU_MANUAL_HOOK
 fi
