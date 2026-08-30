@@ -157,6 +157,7 @@ static int __maybe_unused one = 1;
 static int __maybe_unused two = 2;
 static int __maybe_unused three = 3;
 static int __maybe_unused four = 4;
+static int qos_safety_margin_min = 50;
 static int int_max = INT_MAX;
 static unsigned long zero_ul;
 static unsigned long one_ul = 1;
@@ -1959,6 +1960,15 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 		.extra2		= &one,
+	},
+	{
+		.procname	= "sched_qos_safety_margin",
+		.data		= &sysctl_sched_qos_safety_margin,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &qos_safety_margin_min,
+		.extra2		= &one_hundred,
 	},
 #endif
 #ifdef OPLUS_FEATURE_SCHED_ASSIST

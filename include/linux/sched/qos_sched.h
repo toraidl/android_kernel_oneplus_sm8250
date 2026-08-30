@@ -25,6 +25,7 @@ enum qos_sched_reason {
 extern int sysctl_sched_qos_enable;
 extern int sysctl_sched_qos_mode;
 extern int sysctl_sched_qos_debug;
+extern int sysctl_sched_qos_safety_margin;
 
 enum qos_sched_level qos_sched_task_level(struct task_struct *task);
 bool qos_sched_skip_cpu(struct task_struct *task, int cpu);

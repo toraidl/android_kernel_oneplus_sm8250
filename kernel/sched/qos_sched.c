@@ -2,11 +2,11 @@
 /*
  * Oplus scheduler QoS policy for the SM8250 WALT/EAS scheduler.
  *
- * This first implementation deliberately consumes existing task signals.
- * FrameBoost and SchedAssist remain authoritative; QoS only keeps an
- * abnormal CFS task off the maximum-capacity cluster when a lower cluster is
- * available.  Mode 1 is observation-only, so the feature can be enabled on a
- * production kernel before placement changes are tested.
+ * This policy deliberately consumes existing task signals.  FrameBoost and
+ * SchedAssist remain authoritative; QoS only keeps an abnormal CFS task off
+ * the maximum-capacity cluster when a lower cluster has safe spare capacity.
+ * Mode 1 is observation-only, so the feature can be enabled on a production
+ * kernel before placement changes are tested.
  */
 #include <linux/cpumask.h>
 #include <linux/sched.h>
@@ -17,6 +17,7 @@
 #include <trace/events/qos_sched.h>
 
 #include "sched.h"
+#include "walt.h"
 
 #ifdef OPLUS_FEATURE_SCHED_ASSIST
 #include <linux/sched_assist/sched_assist_common.h>
@@ -34,6 +35,18 @@
 int sysctl_sched_qos_enable;
 int sysctl_sched_qos_mode = 1;
 int sysctl_sched_qos_debug;
+int sysctl_sched_qos_safety_margin = 90;
+
+#define QOS_SCHED_MARGIN_MIN 50
+#define QOS_SCHED_MARGIN_MAX 100
+
+struct qos_sched_candidate {
+	int cpu;
+	unsigned long capacity;
+	unsigned long spare;
+	bool idle;
+	bool same_cluster;
+};
 
 static bool qos_sched_active(void)
 {
@@ -64,24 +77,114 @@ enum qos_sched_level qos_sched_task_level(struct task_struct *task)
 	return QOS_LEVEL_NORMAL;
 }
 
-static bool qos_sched_lower_cpu_available(struct task_struct *task)
+static unsigned int qos_sched_margin(void)
 {
-	int cpu;
-	unsigned long task_util = 0;
+	int margin = READ_ONCE(sysctl_sched_qos_safety_margin);
+
+	if (margin < QOS_SCHED_MARGIN_MIN)
+		return QOS_SCHED_MARGIN_MIN;
+	if (margin > QOS_SCHED_MARGIN_MAX)
+		return QOS_SCHED_MARGIN_MAX;
+	return margin;
+}
+
+static unsigned long qos_sched_cpu_util_without(int cpu,
+						struct task_struct *task)
+{
+	unsigned long util = cpu_util(cpu);
+	unsigned long task_util_value;
+
+	if (cpu != task_cpu(task))
+		return util;
 
 #ifdef CONFIG_SCHED_WALT
-	task_util = task_util_est(task);
+	/* WALT has no useful blocked-util decay while a task is waking. */
+	if (READ_ONCE(task->state) == TASK_WAKING)
+		return util;
 #endif
 
+	task_util_value = task_util(task);
+	if (util > task_util_value)
+		return util - task_util_value;
+	return 0;
+}
+
+static bool qos_sched_same_cluster(int cpu, int task_cpu_id)
+{
+#ifdef CONFIG_SCHED_WALT
+	return same_cluster(cpu, task_cpu_id);
+#else
+	return cpus_share_cache(cpu, task_cpu_id);
+#endif
+}
+
+static bool qos_sched_candidate_fits(struct task_struct *task, int cpu,
+					     unsigned long *capacity,
+					     unsigned long *spare)
+{
+	unsigned long cpu_capacity = capacity_of(cpu);
+	unsigned long cpu_util_value = qos_sched_cpu_util_without(cpu, task);
+	unsigned long task_util_value = task_util_est(task);
+	u64 projected_util = (u64)cpu_util_value + task_util_value;
+	u64 safe_capacity = (u64)cpu_capacity * qos_sched_margin();
+
+	if (!cpu_capacity || projected_util * QOS_SCHED_MARGIN_MAX >
+		safe_capacity)
+		return false;
+
+	*capacity = cpu_capacity;
+	*spare = cpu_capacity > cpu_util_value ?
+		cpu_capacity - cpu_util_value : 0;
+	return true;
+}
+
+static bool qos_sched_candidate_better(const struct qos_sched_candidate *candidate,
+					       const struct qos_sched_candidate *best)
+{
+	if (candidate->idle != best->idle)
+		return candidate->idle;
+	if (candidate->spare != best->spare)
+		return candidate->spare > best->spare;
+	if (candidate->same_cluster != best->same_cluster)
+		return candidate->same_cluster;
+
+	/* Keep the low-priority task on the lowest-capacity safe cluster. */
+	if (candidate->capacity != best->capacity)
+		return candidate->capacity < best->capacity;
+	return candidate->cpu < best->cpu;
+}
+
+static int qos_sched_find_lower_cpu(struct task_struct *task)
+{
+	struct qos_sched_candidate best = {
+		.cpu = -1,
+	};
+	int task_cpu_id = task_cpu(task);
+	int cpu;
+
 	for_each_cpu(cpu, &task->cpus_allowed) {
+		struct qos_sched_candidate candidate;
+		unsigned long capacity, spare;
+
 		if (!cpu_active(cpu) || cpu_isolated(cpu))
 			continue;
-		if (!is_max_capacity_cpu(cpu) &&
-			task_util <= capacity_orig_of(cpu))
-			return true;
+		if (is_max_capacity_cpu(cpu))
+			continue;
+
+		if (!qos_sched_candidate_fits(task, cpu, &capacity, &spare))
+			continue;
+
+		candidate.cpu = cpu;
+		candidate.capacity = capacity;
+		candidate.spare = spare;
+		candidate.idle = available_idle_cpu(cpu);
+		candidate.same_cluster = qos_sched_same_cluster(cpu, task_cpu_id);
+
+		if (best.cpu < 0 || qos_sched_candidate_better(&candidate, &best))
+			best = candidate;
 	}
 
-	return false;
+	return best.cpu;
 }
 
 bool qos_sched_skip_cpu(struct task_struct *task, int cpu)
@@ -92,35 +195,8 @@ bool qos_sched_skip_cpu(struct task_struct *task, int cpu)
 	if (qos_sched_task_level(task) != QOS_LEVEL_LOW)
 		return false;
 
-	return is_max_capacity_cpu(cpu) &&
-		qos_sched_lower_cpu_available(task);
-}
-
-static int qos_sched_find_lower_cpu(struct task_struct *task)
-{
-	int cpu;
-	int best_cpu = -1;
-	unsigned long task_util = 0;
-
-#ifdef CONFIG_SCHED_WALT
-	task_util = task_util_est(task);
-#endif
-
-	for_each_cpu(cpu, &task->cpus_allowed) {
-		unsigned long capacity;
-
-		if (!cpu_active(cpu) || cpu_isolated(cpu))
-			continue;
-
-		capacity = capacity_orig_of(cpu);
-		if (task_util > capacity)
-			continue;
-
-		if (best_cpu < 0 || capacity < capacity_orig_of(best_cpu))
-			best_cpu = cpu;
-	}
-
-	return best_cpu;
+	return cpu >= 0 && cpu < nr_cpu_ids && is_max_capacity_cpu(cpu) &&
+		qos_sched_find_lower_cpu(task) >= 0;
 }
 
 void qos_sched_adjust_target(struct task_struct *task, int eas_cpu,
@@ -130,10 +206,15 @@ void qos_sched_adjust_target(struct task_struct *task, int eas_cpu,
 	int final_cpu;
 	int reason = QOS_REASON_EAS_KEEP;
 	int mode;
+	unsigned long qos_task_util;
+	unsigned long final_util = 0;
+	unsigned long final_capacity = 0;
+	unsigned long final_spare = 0;
 
 	if (!task || !target_cpu || !qos_sched_active())
 		return;
 
+	qos_task_util = task_util_est(task);
 	mode = READ_ONCE(sysctl_sched_qos_mode);
 	level = qos_sched_task_level(task);
 	final_cpu = *target_cpu;
@@ -165,10 +246,17 @@ void qos_sched_adjust_target(struct task_struct *task, int eas_cpu,
 	}
 
 	*target_cpu = final_cpu;
+	if (final_cpu >= 0 && final_cpu < nr_cpu_ids) {
+		final_util = qos_sched_cpu_util_without(final_cpu, task);
+		final_capacity = capacity_of(final_cpu);
+		final_spare = final_capacity > final_util ?
+			final_capacity - final_util : 0;
+	}
 
 trace:
 	if (READ_ONCE(sysctl_sched_qos_debug) || level != QOS_LEVEL_NORMAL ||
 		final_cpu != eas_cpu)
 		trace_qos_sched_decision(task, level, eas_cpu, final_cpu,
-					reason, mode);
+				reason, mode, qos_task_util, final_util,
+				final_capacity, final_spare);
 }
