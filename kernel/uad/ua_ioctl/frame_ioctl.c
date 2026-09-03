@@ -10,6 +10,8 @@
 #include <linux/seq_file.h>
 #include <../fs/proc/internal.h>
 
+#include <trace/events/oplus_backport.h>
+
 #ifdef CONFIG_ARCH_MEDIATEK
 #include <../kernel/oplus_perf_sched/sched_assist/sa_common.h>
 #include <../kernel/oplus_perf_sched/frame_boost/frame_boost.h>
@@ -117,6 +119,10 @@ static long ofb_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		 */
 		if ((data.pid != current->pid) || (data.pid != get_frame_group_ui()))
 			return ret;
+
+		trace_oplus_backport_event("frame", "hint", current->pid,
+					   current->tgid, data.stage, data.pid,
+					   data.tid, (int)get_frame_rate());
 
 		if (data.stage == BOOST_FRAME_START) {
 #ifdef CONFIG_ARCH_MEDIATEK

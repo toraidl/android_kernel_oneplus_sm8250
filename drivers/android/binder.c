@@ -74,6 +74,8 @@
 #include <linux/spinlock.h>
 #include <linux/ratelimit.h>
 
+#include <trace/events/oplus_backport.h>
+
 #include <uapi/linux/android/binder.h>
 #include <uapi/linux/android/binderfs.h>
 #include <uapi/linux/sched/types.h>
@@ -765,6 +767,9 @@ void binder_async_ux_release_buffer(struct binder_buffer *buffer)
 	if (!task)
 		return;
 
+	trace_oplus_backport_event("binder", "async_release",
+				   task->pid, task->tgid, 0, 0,
+				   task->ux_depth, 0);
 	binder_unset_async_inherit_ux(task);
 	put_task_struct(task);
 }
@@ -4119,8 +4124,13 @@ static void binder_transaction(struct binder_proc *proc,
 	t->flags = tr->flags;
 	t->is_reply = reply;
 #ifdef OPLUS_FEATURE_SCHED_ASSIST
-	if ((t->flags & TF_ONE_WAY) && test_set_inherit_ux(current))
+	if ((t->flags & TF_ONE_WAY) && test_set_inherit_ux(current)) {
+		trace_oplus_backport_event("binder", "async_mark",
+					   current->pid, current->tgid,
+					   t->debug_id, t->flags,
+					   current->ux_depth, 0);
 		t->async_ux = true;
+	}
 #endif /* OPLUS_FEATURE_SCHED_ASSIST */
 	if (!(t->flags & TF_ONE_WAY) &&
 	    binder_supported_policy(current->policy)) {
@@ -5801,6 +5811,11 @@ retry:
 		    binder_set_async_inherit_ux(thread->task)) {
 			get_task_struct(thread->task);
 			WRITE_ONCE(t->buffer->async_ux_task, thread->task);
+			trace_oplus_backport_event("binder", "async_set",
+					       thread->task->pid,
+					       thread->task->tgid,
+					       t->debug_id, t->buffer->data_size,
+					       thread->task->ux_depth, 0);
 		}
 #endif /* OPLUS_FEATURE_SCHED_ASSIST */
 

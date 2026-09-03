@@ -14,6 +14,7 @@
 
 #include <trace/events/sched.h>
 #include <trace/events/task.h>
+#include <trace/events/oplus_backport.h>
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
 #if defined(OPLUS_FEATURE_SCHED_ASSIST) && defined(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
@@ -965,6 +966,9 @@ int rollover_frame_group_window(int group_id)
 
 	wallclock = fbg_ktime_get_ns();
 	update_window_start(wallclock, grp, group_id);
+	trace_oplus_backport_event("frame", "window_rollover", 0, 0,
+				   group_id, (int)grp->window_size,
+				   (int)grp->frame_zone, (int)grp->nr_running);
 
 	if (unlikely(sysctl_frame_boost_debug) && (group_id == DEFAULT_FRAME_GROUP_ID))
 		val_systrace_c(get_frame_rate(), "framerate");
