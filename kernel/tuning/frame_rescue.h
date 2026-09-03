@@ -19,6 +19,7 @@
 struct frame_rescue_state {
 	struct hrtimer timer;
 	u64 deadline_ns;
+	u64 generation;
 	unsigned long min_util;
 	bool armed;
 	bool active;
@@ -27,6 +28,7 @@ struct frame_rescue_state {
 static inline void frame_rescue_state_reset(struct frame_rescue_state *state)
 {
 	state->deadline_ns = 0;
+	state->generation = 0;
 	state->min_util = 0;
 	state->armed = false;
 	state->active = false;

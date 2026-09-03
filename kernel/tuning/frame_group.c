@@ -343,17 +343,32 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 		container_of(state, struct frame_group, rescue);
 	raw_spinlock_t *lock = frame_rescue_lock_for_group(grp);
 	unsigned long flags;
+	u64 generation;
+	u64 now;
+
+	/* A callback may race a rollover or cancellation.  Snapshot the
+	 * generation before attempting the group lock and never clear state
+	 * from the lock-failure path.  The owner of the lock may already have
+	 * published a newer timer generation.
+	 */
+	if (!READ_ONCE(state->armed))
+		return HRTIMER_NORESTART;
+	generation = READ_ONCE(state->generation);
 
 	/* Never wait for a frame-group lock from hrtimer context. */
-	if (!raw_spin_trylock_irqsave(lock, flags)) {
-		WRITE_ONCE(state->armed, false);
+	if (!raw_spin_trylock_irqsave(lock, flags))
 		return HRTIMER_NORESTART;
-	}
+
+	now = fbg_ktime_get_ns();
 
 	if (!frame_rescue_enabled() || !READ_ONCE(state->armed) ||
+	    state->generation != generation || !state->deadline_ns ||
+	    now < state->deadline_ns || now < grp->window_start ||
+	    now - grp->window_start > (2ULL * grp->window_size) ||
 	    !(grp->frame_zone & FRAME_ZONE) || list_empty(&grp->tasks)) {
 		WRITE_ONCE(state->armed, false);
 		state->active = false;
+		state->deadline_ns = 0;
 		state->min_util = 0;
 		raw_spin_unlock_irqrestore(lock, flags);
 		return HRTIMER_NORESTART;
@@ -376,6 +391,7 @@ static void frame_rescue_cancel_locked(struct frame_group *grp)
 	struct frame_rescue_state *state = &grp->rescue;
 
 	frame_grp_with_lock_assert(grp);
+	state->generation++;
 	WRITE_ONCE(state->armed, false);
 	state->active = false;
 	state->deadline_ns = 0;
@@ -393,6 +409,7 @@ static void frame_rescue_arm_locked(struct frame_group *grp, u64 window_start)
 	struct frame_rescue_state *state = &grp->rescue;
 
 	frame_grp_with_lock_assert(grp);
+	state->generation++;
 	WRITE_ONCE(state->armed, false);
 	state->active = false;
 	state->min_util = 0;
