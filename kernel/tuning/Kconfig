@@ -5,3 +5,13 @@ config OPLUS_FEATURE_FRAME_BOOST
 	help
 		track key thread information during frame drawing, opt task placement and frequency selection
 
+config OPLUS_FRAME_RESCUE_LITE
+	bool "Oplus Frame Rescue Lite state"
+	depends on OPLUS_FEATURE_FRAME_BOOST
+	default n
+	help
+		Reserve per-frame-group state for the experimental Frame Rescue Lite
+		deadline path on Oplus FrameBoost 3.0 devices. This option does not
+		change frame utilization or CPU placement until a later runtime-gated
+		implementation is enabled, and remains disabled for production use
+		until its lifecycle and power impact are validated.

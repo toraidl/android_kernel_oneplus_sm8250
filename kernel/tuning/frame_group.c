@@ -29,6 +29,7 @@ extern int sysctl_slide_boost_enabled;
 extern int sysctl_input_boost_enabled;
 
 #include "frame_boost.h"
+#include "frame_rescue.h"
 #include "cluster_boost.h"
 #include "frame_debug.h"
 
@@ -100,6 +101,11 @@ struct frame_group {
 	/* Util used to adjust cpu frequency */
 	unsigned long policy_util;
 	unsigned long curr_util;
+
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	/* Rescue Lite state is inert until a later timer/util commit. */
+	struct frame_rescue_state rescue;
+#endif
 };
 
 static DEFINE_RAW_SPINLOCK(def_fbg_lock);
@@ -2343,6 +2349,9 @@ int frame_group_init(void)
 	grp->mark_start = 0;
 	grp->preferred_cluster = NULL;
 	grp->available_cluster = NULL;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_state_reset(&grp->rescue);
+#endif
 
 	/* Sf composition group initialization */
 	grp = &sf_composition_group;
@@ -2353,6 +2362,9 @@ int frame_group_init(void)
 	grp->mark_start = 0;
 	grp->preferred_cluster = NULL;
 	grp->available_cluster = NULL;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_state_reset(&grp->rescue);
+#endif
 
 	/* Game frame group initialization */
 	grp = &game_frame_boost_group;
@@ -2363,6 +2375,9 @@ int frame_group_init(void)
 	grp->mark_start = 0;
 	grp->preferred_cluster = NULL;
 	grp->available_cluster = NULL;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_state_reset(&grp->rescue);
+#endif
 
 	schedtune_spc_rdiv = reciprocal_value(100);
 
