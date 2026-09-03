@@ -103,7 +103,7 @@ struct frame_group {
 	unsigned long curr_util;
 
 #if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
-	/* Rescue Lite state is inert until a later timer/util commit. */
+	/* Rescue Lite deadline state; policy and util control remain separate. */
 	struct frame_rescue_state rescue;
 #endif
 };
@@ -325,6 +325,108 @@ static inline void frame_grp_with_lock_assert(struct frame_group *grp)
 		lockdep_assert_held(&def_fbg_lock);
 }
 
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+static inline raw_spinlock_t *frame_rescue_lock_for_group(struct frame_group *grp)
+{
+	if (grp == &sf_composition_group)
+		return &sf_fbg_lock;
+	if (grp == &game_frame_boost_group)
+		return &game_fbg_lock;
+	return &def_fbg_lock;
+}
+
+static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
+{
+	struct frame_rescue_state *state =
+		container_of(timer, struct frame_rescue_state, timer);
+	struct frame_group *grp =
+		container_of(state, struct frame_group, rescue);
+	raw_spinlock_t *lock = frame_rescue_lock_for_group(grp);
+	unsigned long flags;
+
+	/* Never wait for a frame-group lock from hrtimer context. */
+	if (!raw_spin_trylock_irqsave(lock, flags)) {
+		WRITE_ONCE(state->armed, false);
+		return HRTIMER_NORESTART;
+	}
+
+	if (!frame_rescue_enabled() || !READ_ONCE(state->armed)) {
+		WRITE_ONCE(state->armed, false);
+		raw_spin_unlock_irqrestore(lock, flags);
+		return HRTIMER_NORESTART;
+	}
+
+	WRITE_ONCE(state->armed, false);
+	state->active = true;
+	trace_oplus_backport_event("frame", "rescue_fire", 0, 0,
+				   get_frame_group_id(grp),
+				   (int)state->min_util,
+				   (int)grp->frame_zone, 0);
+	raw_spin_unlock_irqrestore(lock, flags);
+
+	return HRTIMER_NORESTART;
+}
+
+static void frame_rescue_cancel_locked(struct frame_group *grp)
+{
+	struct frame_rescue_state *state = &grp->rescue;
+
+	frame_grp_with_lock_assert(grp);
+	WRITE_ONCE(state->armed, false);
+	state->active = false;
+	state->deadline_ns = 0;
+	state->min_util = 0;
+	/* The callback uses trylock, so it cannot wait on this group lock. */
+	hrtimer_try_to_cancel(&state->timer);
+	if (frame_rescue_enabled())
+		trace_oplus_backport_event("frame", "rescue_cancel", 0, 0,
+					   get_frame_group_id(grp), 0,
+					   (int)grp->frame_zone, 0);
+}
+
+static void frame_rescue_arm_locked(struct frame_group *grp, u64 window_start)
+{
+	struct frame_rescue_state *state = &grp->rescue;
+
+	frame_grp_with_lock_assert(grp);
+	WRITE_ONCE(state->armed, false);
+	state->active = false;
+	state->min_util = 0;
+	state->deadline_ns = window_start +
+		((grp->window_size * FRAME_RESCUE_DEADLINE_NUM) >>
+		 FRAME_RESCUE_DEADLINE_SHIFT);
+	hrtimer_try_to_cancel(&state->timer);
+
+	if (!frame_rescue_enabled() || list_empty(&grp->tasks))
+		return;
+
+	WRITE_ONCE(state->armed, true);
+	hrtimer_start(&state->timer, ns_to_ktime(state->deadline_ns),
+		      HRTIMER_MODE_ABS);
+	trace_oplus_backport_event("frame", "rescue_arm", 0, 0,
+				   get_frame_group_id(grp),
+				   (int)grp->window_size,
+				   (int)grp->frame_zone, 0);
+}
+
+static void frame_rescue_cancel_all(void)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&def_fbg_lock, flags);
+	frame_rescue_cancel_locked(&default_frame_boost_group);
+	raw_spin_unlock_irqrestore(&def_fbg_lock, flags);
+
+	raw_spin_lock_irqsave(&sf_fbg_lock, flags);
+	frame_rescue_cancel_locked(&sf_composition_group);
+	raw_spin_unlock_irqrestore(&sf_fbg_lock, flags);
+
+	raw_spin_lock_irqsave(&game_fbg_lock, flags);
+	frame_rescue_cancel_locked(&game_frame_boost_group);
+	raw_spin_unlock_irqrestore(&game_fbg_lock, flags);
+}
+#endif
+
 static inline bool __frame_boost_enabled(void)
 {
 	return likely(sysctl_frame_boost_enable);
@@ -363,6 +465,9 @@ static void fbg_resume(void)
 
 static int fbg_suspend(void)
 {
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_cancel_all();
+#endif
 	ktime_last = ktime_get();
 	fbg_ktime_suspended = true;
 	return 0;
@@ -411,6 +516,9 @@ static void remove_task_from_frame_group(struct task_struct *tsk)
 		grp->policy_util = 0;
 		grp->curr_util = 0;
 		grp->nr_running = 0;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+		frame_rescue_cancel_locked(grp);
+#endif
 	}
 }
 
@@ -449,6 +557,9 @@ static void clear_all_static_frame_task(struct frame_group *grp)
 		grp->policy_util = 0;
 		grp->curr_util = 0;
 		grp->nr_running = 0;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+		frame_rescue_cancel_locked(grp);
+#endif
 	}
 }
 
@@ -838,16 +949,25 @@ void set_frame_group_window_size(unsigned int window_size)
 
 	grp = &default_frame_boost_group;
 	raw_spin_lock_irqsave(&def_fbg_lock, flags);
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_cancel_locked(grp);
+#endif
 	grp->window_size = window_size;
 	raw_spin_unlock_irqrestore(&def_fbg_lock, flags);
 
 	grp = &sf_composition_group;
 	raw_spin_lock_irqsave(&sf_fbg_lock, flags);
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_cancel_locked(grp);
+#endif
 	grp->window_size = window_size;
 	raw_spin_unlock_irqrestore(&sf_fbg_lock, flags);
 
 	grp = &game_frame_boost_group;
 	raw_spin_lock_irqsave(&game_fbg_lock, flags);
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_cancel_locked(grp);
+#endif
 	grp->window_size = window_size;
 	raw_spin_unlock_irqrestore(&game_fbg_lock, flags);
 }
@@ -901,6 +1021,9 @@ static s64 update_window_start(u64 wallclock, struct frame_group *grp, int group
 
 	grp->window_start = wallclock;
 	grp->prev_window_size = grp->window_size;
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_arm_locked(grp, wallclock);
+#endif
 	grp->window_busy = (grp->curr_window_exec * 100) / delta;
 
 	if (unlikely(sysctl_frame_boost_debug)) {
@@ -1007,8 +1130,12 @@ static void update_frame_zone(struct frame_group *grp, u64 wallclock)
 	if (sysctl_slide_boost_enabled || sysctl_input_boost_enabled)
 		grp->frame_zone |= USER_ZONE;
 
-	if (!grp->frame_zone)
+	if (!grp->frame_zone) {
 		set_frame_state(FRAME_END);
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+		frame_rescue_cancel_locked(grp);
+#endif
+	}
 
 	if (unlikely(sysctl_frame_boost_debug)) {
 		if (grp == &sf_composition_group)
@@ -2351,6 +2478,8 @@ int frame_group_init(void)
 	grp->available_cluster = NULL;
 #if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
 	frame_rescue_state_reset(&grp->rescue);
+	hrtimer_init(&grp->rescue.timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	grp->rescue.timer.function = frame_rescue_timer_fn;
 #endif
 
 	/* Sf composition group initialization */
@@ -2364,6 +2493,8 @@ int frame_group_init(void)
 	grp->available_cluster = NULL;
 #if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
 	frame_rescue_state_reset(&grp->rescue);
+	hrtimer_init(&grp->rescue.timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	grp->rescue.timer.function = frame_rescue_timer_fn;
 #endif
 
 	/* Game frame group initialization */
@@ -2377,9 +2508,15 @@ int frame_group_init(void)
 	grp->available_cluster = NULL;
 #if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
 	frame_rescue_state_reset(&grp->rescue);
+	hrtimer_init(&grp->rescue.timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	grp->rescue.timer.function = frame_rescue_timer_fn;
 #endif
 
 	schedtune_spc_rdiv = reciprocal_value(100);
+
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_rescue_init();
+#endif
 
 	if (!build_clusters()) {
 		ret = -1;

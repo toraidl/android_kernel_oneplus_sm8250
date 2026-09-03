@@ -6,3 +6,4 @@ obj-y += cluster_boost.o
 obj-y += frame_boost.o
 obj-y += frame_debug.o
 obj-y += frame_group.o
+obj-$(CONFIG_OPLUS_FRAME_RESCUE_LITE) += frame_rescue.o

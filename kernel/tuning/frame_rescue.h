@@ -9,9 +9,14 @@
 #ifndef _FRAME_RESCUE_H
 #define _FRAME_RESCUE_H
 
+#include <linux/hrtimer.h>
 #include <linux/types.h>
 
+#define FRAME_RESCUE_DEADLINE_NUM	614U
+#define FRAME_RESCUE_DEADLINE_SHIFT	10
+
 struct frame_rescue_state {
+	struct hrtimer timer;
 	u64 deadline_ns;
 	unsigned long min_util;
 	bool armed;
@@ -25,5 +30,8 @@ static inline void frame_rescue_state_reset(struct frame_rescue_state *state)
 	state->armed = false;
 	state->active = false;
 }
+
+bool frame_rescue_enabled(void);
+void frame_rescue_init(void);
 
 #endif /* _FRAME_RESCUE_H */
