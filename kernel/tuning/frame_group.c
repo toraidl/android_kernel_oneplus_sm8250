@@ -350,14 +350,18 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 		return HRTIMER_NORESTART;
 	}
 
-	if (!frame_rescue_enabled() || !READ_ONCE(state->armed)) {
+	if (!frame_rescue_enabled() || !READ_ONCE(state->armed) ||
+	    !(grp->frame_zone & FRAME_ZONE) || list_empty(&grp->tasks)) {
 		WRITE_ONCE(state->armed, false);
+		state->active = false;
+		state->min_util = 0;
 		raw_spin_unlock_irqrestore(lock, flags);
 		return HRTIMER_NORESTART;
 	}
 
 	WRITE_ONCE(state->armed, false);
 	state->active = true;
+	state->min_util = FRAME_RESCUE_MIN_UTIL;
 	trace_oplus_backport_event("frame", "rescue_fire", 0, 0,
 				   get_frame_group_id(grp),
 				   (int)state->min_util,
@@ -397,8 +401,10 @@ static void frame_rescue_arm_locked(struct frame_group *grp, u64 window_start)
 		 FRAME_RESCUE_DEADLINE_SHIFT);
 	hrtimer_try_to_cancel(&state->timer);
 
-	if (!frame_rescue_enabled() || list_empty(&grp->tasks))
+	if (!frame_rescue_enabled() || list_empty(&grp->tasks)) {
+		state->deadline_ns = 0;
 		return;
+	}
 
 	WRITE_ONCE(state->armed, true);
 	hrtimer_start(&state->timer, ns_to_ktime(state->deadline_ns),
@@ -407,6 +413,21 @@ static void frame_rescue_arm_locked(struct frame_group *grp, u64 window_start)
 				   get_frame_group_id(grp),
 				   (int)grp->window_size,
 				   (int)grp->frame_zone, 0);
+}
+
+static unsigned long rescue_util(struct frame_group *grp, unsigned long util)
+{
+	unsigned long min_util;
+
+	frame_grp_with_lock_assert(grp);
+	if (!frame_rescue_enabled() || !grp->rescue.active ||
+	    !(grp->frame_zone & FRAME_ZONE))
+		return util;
+
+	min_util = grp->rescue.min_util;
+	if (min_util > SCHED_CAPACITY_SCALE)
+		min_util = SCHED_CAPACITY_SCALE;
+	return max(util, min_util);
 }
 
 static void frame_rescue_cancel_all(void)
@@ -1130,12 +1151,14 @@ static void update_frame_zone(struct frame_group *grp, u64 wallclock)
 	if (sysctl_slide_boost_enabled || sysctl_input_boost_enabled)
 		grp->frame_zone |= USER_ZONE;
 
-	if (!grp->frame_zone) {
+	if (!grp->frame_zone)
 		set_frame_state(FRAME_END);
+
 #if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	if (!(grp->frame_zone & FRAME_ZONE) &&
+	    (grp->rescue.active || READ_ONCE(grp->rescue.armed)))
 		frame_rescue_cancel_locked(grp);
 #endif
-	}
 
 	if (unlikely(sysctl_frame_boost_debug)) {
 		if (grp == &sf_composition_group)
@@ -1274,6 +1297,10 @@ static unsigned long update_freq_policy_util(struct frame_group *grp, u64 wallcl
 
 	grp->curr_util = curr_putil;
 	frame_util = max_t(unsigned long, prev_putil, curr_putil);
+
+#if IS_ENABLED(CONFIG_OPLUS_FRAME_RESCUE_LITE)
+	frame_util = rescue_util(grp, frame_util);
+#endif
 
 	/* We allow vendor governor's freq-query using vutil, but we only updating
 	 * last_util_update_time when called from new hook update_curr()

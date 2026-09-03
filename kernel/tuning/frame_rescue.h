@@ -14,6 +14,7 @@
 
 #define FRAME_RESCUE_DEADLINE_NUM	614U
 #define FRAME_RESCUE_DEADLINE_SHIFT	10
+#define FRAME_RESCUE_MIN_UTIL		384U
 
 struct frame_rescue_state {
 	struct hrtimer timer;
