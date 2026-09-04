@@ -79,6 +79,10 @@
 #include "cpupri.h"
 #include "cpudeadline.h"
 
+#if defined(OPLUS_FEATURE_SCHED_ASSIST) && defined(CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT)
+#include <linux/sched_assist/eas_opt/oplus_iowait.h>
+#endif
+
 #ifdef CONFIG_SCHED_DEBUG
 # define SCHED_WARN_ON(x)	WARN_ONCE(x, #x)
 #else
@@ -2606,7 +2610,13 @@ static inline void cpufreq_update_util(struct rq *rq, unsigned int flags)
 	u64 clock;
 
 #ifdef CONFIG_SCHED_WALT
+#if defined(OPLUS_FEATURE_SCHED_ASSIST) && defined(CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT)
+	if (sysctl_iowait_reset_ticks == 1 &&
+	    sysctl_iowait_apply_ticks == 0 &&
+	    !(flags & SCHED_CPUFREQ_WALT))
+#else
 	if (!(flags & SCHED_CPUFREQ_WALT))
+#endif
 		return;
 	clock = sched_ktime_clock();
 #else
