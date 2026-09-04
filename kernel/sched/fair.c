@@ -13753,10 +13753,12 @@ void check_for_migration(struct rq *rq, struct task_struct *p)
 			active_balance = kick_active_balance(rq, p, new_cpu);
 			if (active_balance) {
 				mark_reserved(new_cpu);
+				preempt_disable();
 				raw_spin_unlock(&migration_lock);
 				ret = stop_one_cpu_nowait(prev_cpu,
 					active_load_balance_cpu_stop, rq,
 					&rq->active_balance_work);
+				preempt_enable();
 				if (!ret)
 					clear_reserved(new_cpu);
 				else
