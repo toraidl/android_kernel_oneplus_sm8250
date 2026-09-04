@@ -340,6 +340,23 @@ static unsigned long update_freq_policy_util(struct frame_group *grp,
 					     unsigned int flags);
 
 #ifdef CONFIG_SMP
+enum frame_rescue_kick_drop_reason {
+	FRAME_RESCUE_KICK_DROP_CPU = 1,
+	FRAME_RESCUE_KICK_DROP_GROUP_LOCK,
+	FRAME_RESCUE_KICK_DROP_STATE,
+	FRAME_RESCUE_KICK_DROP_RQ_LOCK,
+	FRAME_RESCUE_KICK_DROP_PENDING,
+	FRAME_RESCUE_KICK_DROP_QUEUE,
+};
+
+static inline void frame_rescue_trace_kick(struct frame_group *grp,
+					   const char *action, int cpu,
+					   unsigned int flags, int status)
+{
+	trace_oplus_backport_event("frame", action, 0, 0,
+				   get_frame_group_id(grp), cpu, (int)flags, status);
+}
+
 static unsigned int frame_rescue_kick_flags(struct frame_group *grp)
 {
 	if (grp == &sf_composition_group)
@@ -382,11 +399,17 @@ static void frame_rescue_kick_fn(void *info)
 	generation = READ_ONCE(state->kick_generation);
 	flags = READ_ONCE(state->kick_flags);
 
-	if (!cpu_online(cpu) || cpu != READ_ONCE(state->kick_cpu))
+	if (!cpu_online(cpu) || cpu != READ_ONCE(state->kick_cpu)) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_CPU);
 		goto out;
+	}
 
-	if (!raw_spin_trylock_irqsave(group_lock, group_flags))
+	if (!raw_spin_trylock_irqsave(group_lock, group_flags)) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_GROUP_LOCK);
 		goto out;
+	}
 
 	if (frame_rescue_enabled() && READ_ONCE(state->active) &&
 	    state->generation == generation &&
@@ -394,15 +417,22 @@ static void frame_rescue_kick_fn(void *info)
 		valid = true;
 
 	raw_spin_unlock_irqrestore(group_lock, group_flags);
-	if (!valid)
+	if (!valid) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_STATE);
 		goto out;
+	}
 
 	rq = cpu_rq(cpu);
-	if (!raw_spin_trylock_irqsave(&rq->lock, rq_flags))
+	if (!raw_spin_trylock_irqsave(&rq->lock, rq_flags)) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_RQ_LOCK);
 		goto out;
+	}
 
 	cpufreq_update_util(rq, flags);
 	raw_spin_unlock_irqrestore(&rq->lock, rq_flags);
+	frame_rescue_trace_kick(grp, "rescue_kick_run", cpu, flags, 0);
 
 out:
 	atomic_set(&state->kick_pending, 0);
@@ -412,22 +442,40 @@ static void frame_rescue_queue_kick(struct frame_group *grp)
 {
 	struct frame_rescue_state *state = &grp->rescue;
 	int cpu = READ_ONCE(state->kick_cpu);
+	unsigned int flags = READ_ONCE(state->kick_flags);
+	int err;
 
-	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_online(cpu))
+	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_online(cpu)) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_CPU);
 		return;
+	}
 
-	if (atomic_cmpxchg(&state->kick_pending, 0, 1))
+	if (atomic_cmpxchg(&state->kick_pending, 0, 1)) {
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_PENDING);
 		return;
+	}
 
 	state->kick_csd.func = frame_rescue_kick_fn;
 	state->kick_csd.info = state;
 	/* Ensure callback metadata is visible before sending the IPI. */
 	smp_wmb();
-	if (smp_call_function_single_async(cpu, &state->kick_csd))
+	err = smp_call_function_single_async(cpu, &state->kick_csd);
+	if (err) {
 		atomic_set(&state->kick_pending, 0);
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", cpu, flags,
+					FRAME_RESCUE_KICK_DROP_QUEUE);
+		return;
+	}
+
+	frame_rescue_trace_kick(grp, "rescue_kick_queue", cpu, flags, 0);
 }
 #else
-static inline void frame_rescue_queue_kick(struct frame_group *grp) { }
+static inline void frame_rescue_queue_kick(struct frame_group *grp)
+{
+	(void)grp;
+}
 #endif
 
 static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
