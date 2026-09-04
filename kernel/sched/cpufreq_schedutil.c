@@ -1167,6 +1167,10 @@ sugov_update_shared(struct update_util_data *hook, u64 time, unsigned int flags)
 	if (sugov_should_update_freq(sg_policy, time) &&
 	    !(flags & SCHED_CPUFREQ_CONTINUE)) {
 		next_f = sugov_next_freq_shared(sg_cpu, time);
+#ifdef CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT
+		/* Keep iowait decay relative to the latest shared-policy update. */
+		sg_policy->last_update = time;
+#endif
 #ifdef OPLUS_FEATURE_POWER_CPUFREQ
 		sg_policy->update_time = time;
 		if (sugov_time_limit(sg_policy, next_f, flags))
