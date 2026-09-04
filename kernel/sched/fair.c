@@ -11587,6 +11587,7 @@ no_move:
 				active_balance = 1;
 				mark_reserved(this_cpu);
 			}
+			preempt_disable();
 			raw_spin_unlock_irqrestore(&busiest->lock, flags);
 
 			if (active_balance) {
@@ -11602,6 +11603,7 @@ no_move:
 				}
 				*continue_balancing = 0;
 			}
+			preempt_enable();
 
 			/* We've kicked active balancing, force task migration. */
 			sd->nr_balance_failed = sd->cache_nice_tries +
