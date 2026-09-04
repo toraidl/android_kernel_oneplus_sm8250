@@ -335,6 +335,101 @@ static inline raw_spinlock_t *frame_rescue_lock_for_group(struct frame_group *gr
 	return &def_fbg_lock;
 }
 
+static unsigned long update_freq_policy_util(struct frame_group *grp,
+					     u64 wallclock,
+					     unsigned int flags);
+
+#ifdef CONFIG_SMP
+static unsigned int frame_rescue_kick_flags(struct frame_group *grp)
+{
+	if (grp == &sf_composition_group)
+		return SCHED_CPUFREQ_WALT | SCHED_CPUFREQ_SF_FRAMEBOOST;
+
+	return SCHED_CPUFREQ_WALT | SCHED_CPUFREQ_DEF_FRAMEBOOST;
+}
+
+static int frame_rescue_kick_cpu_locked(struct frame_group *grp)
+{
+	struct task_struct *task;
+	int cpu;
+
+	/* Game util is not consumed by fbg_freq_policy_util(). */
+	if (grp == &game_frame_boost_group || !grp->preferred_cluster)
+		return -1;
+
+	list_for_each_entry(task, &grp->tasks, fbg_list) {
+		cpu = task_cpu(task);
+		if (cpu_online(cpu) && task_running(cpu_rq(cpu), task))
+			return cpu;
+	}
+
+	return -1;
+}
+
+static void frame_rescue_kick_fn(void *info)
+{
+	struct frame_rescue_state *state = info;
+	struct frame_group *grp =
+		container_of(state, struct frame_group, rescue);
+	raw_spinlock_t *group_lock = frame_rescue_lock_for_group(grp);
+	unsigned long group_flags, rq_flags;
+	struct rq *rq;
+	u64 generation;
+	unsigned int flags;
+	bool valid = false;
+	int cpu = smp_processor_id();
+
+	generation = READ_ONCE(state->kick_generation);
+	flags = READ_ONCE(state->kick_flags);
+
+	if (!cpu_online(cpu) || cpu != READ_ONCE(state->kick_cpu))
+		goto out;
+
+	if (!raw_spin_trylock_irqsave(group_lock, group_flags))
+		goto out;
+
+	if (frame_rescue_enabled() && READ_ONCE(state->active) &&
+	    state->generation == generation &&
+	    (grp->frame_zone & FRAME_ZONE) && !list_empty(&grp->tasks))
+		valid = true;
+
+	raw_spin_unlock_irqrestore(group_lock, group_flags);
+	if (!valid)
+		goto out;
+
+	rq = cpu_rq(cpu);
+	if (!raw_spin_trylock_irqsave(&rq->lock, rq_flags))
+		goto out;
+
+	cpufreq_update_util(rq, flags);
+	raw_spin_unlock_irqrestore(&rq->lock, rq_flags);
+
+out:
+	atomic_set(&state->kick_pending, 0);
+}
+
+static void frame_rescue_queue_kick(struct frame_group *grp)
+{
+	struct frame_rescue_state *state = &grp->rescue;
+	int cpu = READ_ONCE(state->kick_cpu);
+
+	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_online(cpu))
+		return;
+
+	if (atomic_cmpxchg(&state->kick_pending, 0, 1))
+		return;
+
+	state->kick_csd.func = frame_rescue_kick_fn;
+	state->kick_csd.info = state;
+	/* Ensure callback metadata is visible before sending the IPI. */
+	smp_wmb();
+	if (smp_call_function_single_async(cpu, &state->kick_csd))
+		atomic_set(&state->kick_pending, 0);
+}
+#else
+static inline void frame_rescue_queue_kick(struct frame_group *grp) { }
+#endif
+
 static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 {
 	struct frame_rescue_state *state =
@@ -345,6 +440,7 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 	unsigned long flags;
 	u64 generation;
 	u64 now;
+	bool do_kick = false;
 
 	/* A callback may race a rollover or cancellation.  Snapshot the
 	 * generation before attempting the group lock and never clear state
@@ -377,11 +473,30 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 	WRITE_ONCE(state->armed, false);
 	state->active = true;
 	state->min_util = FRAME_RESCUE_MIN_UTIL;
+#ifdef CONFIG_SMP
+	if (grp != &game_frame_boost_group) {
+		unsigned int kick_flags = frame_rescue_kick_flags(grp);
+		int kick_cpu;
+
+		grp->policy_util = update_freq_policy_util(grp, now, kick_flags);
+		if (!atomic_read(&state->kick_pending)) {
+			kick_cpu = frame_rescue_kick_cpu_locked(grp);
+			if (kick_cpu >= 0) {
+				state->kick_cpu = kick_cpu;
+				state->kick_flags = kick_flags;
+				state->kick_generation = generation;
+				do_kick = true;
+			}
+		}
+	}
+#endif
 	trace_oplus_backport_event("frame", "rescue_fire", 0, 0,
 				   get_frame_group_id(grp),
 				   (int)state->min_util,
 				   (int)grp->frame_zone, 0);
 	raw_spin_unlock_irqrestore(lock, flags);
+	if (do_kick)
+		frame_rescue_queue_kick(grp);
 
 	return HRTIMER_NORESTART;
 }
