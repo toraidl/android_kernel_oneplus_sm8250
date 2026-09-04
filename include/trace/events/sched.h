@@ -1589,9 +1589,10 @@ TRACE_EVENT(core_ctl_set_boost,
 TRACE_EVENT(core_ctl_update_nr_need,
 
 	TP_PROTO(int cpu, int nr_need, int prev_misfit_need,
-		int nrrun, int max_nr, int nr_prev_assist),
+		int nrrun, int max_nr, int max_nr_avg, int nr_prev_assist),
 
-	TP_ARGS(cpu, nr_need, prev_misfit_need, nrrun, max_nr, nr_prev_assist),
+	TP_ARGS(cpu, nr_need, prev_misfit_need, nrrun, max_nr, max_nr_avg,
+		nr_prev_assist),
 
 	TP_STRUCT__entry(
 		__field(int, cpu)
@@ -1599,6 +1600,7 @@ TRACE_EVENT(core_ctl_update_nr_need,
 		__field(int, prev_misfit_need)
 		__field(int, nrrun)
 		__field(int, max_nr)
+		__field(int, max_nr_avg)
 		__field(int, nr_prev_assist)
 	),
 
@@ -1608,12 +1610,14 @@ TRACE_EVENT(core_ctl_update_nr_need,
 		__entry->prev_misfit_need = prev_misfit_need;
 		__entry->nrrun = nrrun;
 		__entry->max_nr = max_nr;
+		__entry->max_nr_avg = max_nr_avg;
 		__entry->nr_prev_assist = nr_prev_assist;
 	),
 
-	TP_printk("cpu=%d nr_need=%d prev_misfit_need=%d nrrun=%d max_nr=%d nr_prev_assist=%d",
-		__entry->cpu, __entry->nr_need, __entry->prev_misfit_need,
-		__entry->nrrun, __entry->max_nr, __entry->nr_prev_assist)
+	TP_printk("cpu=%d nr_need=%d prev_misfit_need=%d nrrun=%d max_nr=%d max_avg=%d nr_prev_assist=%d",
+		  __entry->cpu, __entry->nr_need, __entry->prev_misfit_need,
+		  __entry->nrrun, __entry->max_nr, __entry->max_nr_avg,
+		  __entry->nr_prev_assist)
 );
 
 TRACE_EVENT(core_ctl_notif_data,

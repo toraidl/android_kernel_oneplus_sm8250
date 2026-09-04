@@ -712,6 +712,7 @@ static void update_running_avg(void)
 		trace_core_ctl_update_nr_need(cluster->first_cpu, nr_need,
 					prev_misfit_need,
 					cluster->nrrun, cluster->max_nr,
+					cluster->max_nr_avg,
 					cluster->nr_prev_assist);
 
 		big_avg += cluster_real_big_tasks(index);
