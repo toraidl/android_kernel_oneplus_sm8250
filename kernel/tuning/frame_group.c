@@ -489,6 +489,11 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 	u64 generation;
 	u64 now;
 	bool do_kick = false;
+#ifdef CONFIG_SMP
+	unsigned int kick_flags = 0;
+	int kick_drop_reason = 0;
+	int kick_cpu = -1;
+#endif
 
 	/* A callback may race a rollover or cancellation.  Snapshot the
 	 * generation before attempting the group lock and never clear state
@@ -523,17 +528,20 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 	state->min_util = FRAME_RESCUE_MIN_UTIL;
 #ifdef CONFIG_SMP
 	if (grp != &game_frame_boost_group) {
-		unsigned int kick_flags = frame_rescue_kick_flags(grp);
-		int kick_cpu;
-
+		kick_flags = frame_rescue_kick_flags(grp);
 		grp->policy_util = update_freq_policy_util(grp, now, kick_flags);
-		if (!atomic_read(&state->kick_pending)) {
+		if (atomic_read(&state->kick_pending)) {
+			kick_cpu = READ_ONCE(state->kick_cpu);
+			kick_drop_reason = FRAME_RESCUE_KICK_DROP_PENDING;
+		} else {
 			kick_cpu = frame_rescue_kick_cpu_locked(grp);
 			if (kick_cpu >= 0) {
 				state->kick_cpu = kick_cpu;
 				state->kick_flags = kick_flags;
 				state->kick_generation = generation;
 				do_kick = true;
+			} else {
+				kick_drop_reason = FRAME_RESCUE_KICK_DROP_CPU;
 			}
 		}
 	}
@@ -545,6 +553,11 @@ static enum hrtimer_restart frame_rescue_timer_fn(struct hrtimer *timer)
 	raw_spin_unlock_irqrestore(lock, flags);
 	if (do_kick)
 		frame_rescue_queue_kick(grp);
+#ifdef CONFIG_SMP
+	else if (kick_drop_reason)
+		frame_rescue_trace_kick(grp, "rescue_kick_drop", kick_cpu,
+					kick_flags, kick_drop_reason);
+#endif
 
 	return HRTIMER_NORESTART;
 }
