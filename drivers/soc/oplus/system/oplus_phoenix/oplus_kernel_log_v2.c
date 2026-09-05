@@ -113,7 +113,7 @@ static u32 opklog_header_crc(const struct opklog_header_v2 *header)
 
 	memcpy(&copy, header, sizeof(copy));
 	copy.header_crc = 0;
-	return crc32(0, (const u8 *)&copy, sizeof(copy));
+	return ~crc32(~0, (const u8 *)&copy, sizeof(copy));
 }
 
 static bool opklog_header_valid(const char *page)
@@ -162,7 +162,7 @@ static void opklog_fill_header(struct opklog_context *ctx, u32 state)
 	header->state = cpu_to_le32(state);
 	header->slot_count = cpu_to_le32(OPKLOG_SLOT_COUNT);
 	header->slot_size = cpu_to_le32(OPKLOG_SLOT_SIZE);
-	header->payload_crc = cpu_to_le32(ctx->payload_crc);
+	header->payload_crc = cpu_to_le32(~ctx->payload_crc);
 	header->header_crc = 0;
 	header->reserved = 0;
 	header->header_crc = cpu_to_le32(opklog_header_crc(header));
@@ -276,7 +276,7 @@ static int opklog_prepare(struct opklog_context *ctx)
 		ctx->boot_count = 1;
 	ctx->active_slot = ctx->boot_count % OPKLOG_SLOT_COUNT;
 	ctx->payload_len = 0;
-	ctx->payload_crc = 0;
+	ctx->payload_crc = ~0;
 	ctx->page_index = 0;
 	ctx->page_offset = OPKLOG_SLOT_PAYLOAD_OFFSET;
 	ctx->page_dirty = false;
