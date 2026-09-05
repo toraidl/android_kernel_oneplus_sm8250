@@ -68,6 +68,7 @@ dump_part oplusreserve1 oplusreserve1.img 1
 dump_part oplusreserve2 oplusreserve2.img 1
 dump_part oplusreserve3 oplusreserve3.img 1
 dump_part oplusreserve5 oplusreserve5.img 64
+dump_part kernel_log kernel_log.img
 # fallback names
 dump_part opporeserve1 opporeserve1.img 1
 dump_part reserve3 reserve3.img 1
