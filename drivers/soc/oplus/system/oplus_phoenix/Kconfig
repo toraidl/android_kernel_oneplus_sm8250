@@ -13,6 +13,17 @@ config OPLUS_FEATURE_KMSG_WB
     help
       define this config to init oplus phoenix2.0 project.
 
+config OPLUS_FEATURE_KERNEL_LOG_V2
+    bool "OnePlus kernel_log boot logger"
+    depends on OPLUS_FEATURE_PHOENIX
+    depends on BLOCK
+    depends on PRINTK
+    depends on CRC32
+    default y
+    help
+      Persist early kernel messages in the OnePlus kernel_log partition.
+      The driver is a no-op when PARTLABEL=kernel_log is not present.
+
 config OPLUS_FEATURE_PHOENIX_REBOOT_SPEED
     tristate "oplus phoenix project"
     default n

@@ -5,4 +5,5 @@ obj-$(CONFIG_OPLUS_FEATURE_PHOENIX) += phoenix_base.o
 obj-$(CONFIG_OPLUS_FEATURE_PHOENIX) += phoenix_dump.o
 obj-$(CONFIG_OPLUS_FEATURE_PHOENIX) += phoenix_watchdog.o
 obj-$(CONFIG_OPLUS_FEATURE_KMSG_WB) += oplus_kmsg_wb.o
+obj-$(CONFIG_OPLUS_FEATURE_KERNEL_LOG_V2) += oplus_kernel_log_v2.o
 obj-$(CONFIG_OPLUS_FEATURE_PHOENIX_REBOOT_SPEED) += phoenix_reboot_speed.o
