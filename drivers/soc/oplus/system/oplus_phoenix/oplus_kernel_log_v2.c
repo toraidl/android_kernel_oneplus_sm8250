@@ -426,7 +426,9 @@ static int __init opklog_init(void)
 
 	boot_mode = get_boot_mode();
 	if (boot_mode == MSM_BOOT_MODE__FASTBOOT ||
-	    boot_mode == MSM_BOOT_MODE__RECOVERY) {
+	    boot_mode == MSM_BOOT_MODE__RECOVERY ||
+	    strstr(boot_command_line, "androidboot.mode=fastboot") ||
+	    strstr(boot_command_line, "androidboot.mode=recovery")) {
 		pr_info("oplus kernel_log: disabled in boot mode %d\n", boot_mode);
 		return 0;
 	}
