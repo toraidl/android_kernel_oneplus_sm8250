@@ -28,8 +28,8 @@
 #include "oplus_kernel_log_v2.h"
 #include "oplus_phoenix.h"
 
-#define OPKLOG_RETRY_COUNT		60
-#define OPKLOG_RETRY_MSEC		500
+#define OPKLOG_RETRY_COUNT		20
+#define OPKLOG_RETRY_MSEC		100
 #define OPKLOG_POLL_MSEC		500
 #define OPKLOG_TIMEOUT_SEC		180
 #define OPKLOG_LINE_SIZE		2048
@@ -340,8 +340,7 @@ static int opklog_record(struct opklog_context *ctx)
 			break;
 		}
 
-		if (msleep_interruptible(OPKLOG_POLL_MSEC) &&
-		    kthread_should_stop())
+		if (msleep_interruptible(OPKLOG_POLL_MSEC))
 			break;
 	}
 
